@@ -34,20 +34,18 @@ def exact_ppr(adj, alpha, mode='sym'):
     return alpha * np.linalg.inv(A_inner.toarray())
 
 
-_cg = None
+def _cg(A_inner, signals):
+    tmp = [cg(A_inner, signal, maxiter=10000, tol=1e-8)[0] for signal in signals]
+    return np.row_stack(tmp)
+
 def exact_ppr_joblib(adj, alpha, mode='sym', n_jobs=60):
-    global _cg
     assert mode == 'sym'
     
     A_hat   = calc_A_hat(adj, mode=mode)
     A_inner = sp.eye(adj.shape[0]) - (1 - alpha) * A_hat
     
-    def _cg(signals):
-        tmp = [cg(A_inner, signal, maxiter=10000, tol=1e-8)[0] for signal in signals]
-        return np.row_stack(tmp)
-    
     signals = np.eye(adj.shape[0])
-    jobs    = [delayed(_cg)(chunk) for chunk in np.array_split(signals, 4 * n_jobs)]
+    jobs    = [delayed(_cg)(A_inner, chunk) for chunk in np.array_split(signals, 4 * n_jobs)]
     res     = Parallel(backend='loky', n_jobs=n_jobs, verbose=10)(jobs)
     return np.row_stack(res)
 
