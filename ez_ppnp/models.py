@@ -21,13 +21,13 @@ class NormalizedEmbedding(nn.Module):
 
 
 class EmbeddingPPNP(nn.Module):
-    def __init__(self, n_nodes, ppr, hidden_di):
+    def __init__(self, ppr, n_nodes, hidden_dim):
         
         super().__init__()
         
         self.encoder = NormalizedEmbedding(n_nodes, hidden_dim)
         self.ppr     = ppr
-        self.X       = torch.LongTensor(n_nodes)
+        self.X       = torch.arange(n_nodes)
     
     def forward(self, idx):
         node_enc = self.encoder(idx)

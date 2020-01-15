@@ -51,40 +51,11 @@ def exact_ppr_joblib(adj, alpha, mode='sym', n_jobs=60):
 
 # --
 
-class PPR(nn.Module):
+class PrecomputedPPR(nn.Module):
     def __init__(self, ppr):
+        super().__init__()
+        
         self.register_buffer('ppr', torch.FloatTensor(ppr))
         
-        self.sparse = False
-        self.batch  = False
-        
     def forward(self, X, idx, encoder):
-        
-        # Straightforward
-        if not self.sparse and not self.batch:
-            return self.ppr[idx] @ encoder(X.cuda())
-        
-        # Don't pass unecessary points through encoder
-        if not self.sparse and self.batch:
-            tmp = self.ppr[idx]
-            sel = (tmp > 0).any(dim=0)
-            tmp = tmp[:,sel]
-            
-            return tmp @ encoder(X[sel].cuda())
-        
-        if self.sparse:
-            indices  = self.indices[idx]
-            values   = self.values[idx]
-            
-            
-            # !! What's the mode efficient way to do this?
-            # <<
-            u_fwd, u_bwd = indices.unique(return_inverse=True)
-            return (encoder(X[u_fwd])[u_bwd] * values.unsqueeze(-1)).sum(axis=1)
-            # --
-            # Alternatives
-            # return (encoder(X[indices]) * values.unsqueeze(-1)).sum(axis=1)
-            # return (encoder(X)[indices] * values.unsqueeze(-1)).sum(axis=1)
-            # <<
-        
-        raise Exception()
+        return self.ppr[idx] @ encoder(X.cuda())
