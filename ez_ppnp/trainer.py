@@ -20,7 +20,7 @@ def train_unsupervised(model, lr, epochs, batch_size):
     gen = trange(epochs)
     for epoch in gen:
         
-        node_enc, hood_enc = model(idx=np.random.choice(n_nodes, batch_size))
+        node_enc, hood_enc = model(idx=np.random.choice(model.n_nodes, batch_size))
         
         loss = ((node_enc - hood_enc) ** 2).mean()
         

@@ -47,7 +47,7 @@ def exact_ppr_joblib(adj, alpha, mode='sym', n_jobs=60):
     signals = np.eye(adj.shape[0])
     jobs    = [delayed(_cg)(A_inner, chunk) for chunk in np.array_split(signals, 4 * n_jobs)]
     res     = Parallel(backend='loky', n_jobs=n_jobs, verbose=10)(jobs)
-    return np.row_stack(res)
+    return alpha * np.row_stack(res)
 
 # --
 

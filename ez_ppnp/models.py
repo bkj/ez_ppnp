@@ -28,6 +28,7 @@ class EmbeddingPPNP(nn.Module):
         self.encoder = NormalizedEmbedding(n_nodes, hidden_dim)
         self.ppr     = ppr
         self.X       = torch.arange(n_nodes)
+        self.n_nodes = n_nodes
     
     def forward(self, idx):
         node_enc = self.encoder(idx)
