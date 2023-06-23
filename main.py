@@ -34,9 +34,9 @@ _DATASETS = [
 
 def parse_args():
   parser = argparse.ArgumentParser()
-  parser.add_argument('--dataset', type=str, default='jonathan-roberts1/NWPU-RESISC45')
+  parser.add_argument('--dataset', type=str, default='food101')
   parser.add_argument('--model',   type=str, default='openai/clip-vit-large-patch14')
-  parser.add_argument('--sample',  type=int, default=10_000)
+  parser.add_argument('--sample',  type=int, default=20_000)
   parser.add_argument('--seed',    type=int, default=234)
   args = parser.parse_args()
   
@@ -89,26 +89,15 @@ print(f'svc_acc={svc_acc} | cas_acc={cas_acc}')
 
 # --
 
-
-class PrecomputedPPR(nn.Module):
-    def __init__(self, ppr):
-        super().__init__()
-        self.register_buffer('ppr', torch.FloatTensor(ppr))
-        
-    def forward(self, X, idx):
-        return self.ppr[idx] @ X
-
-
 def calc_A_hat(adj, mode):
-    A = adj + torch.eye(adj.shape[0])
-    D = A.sum(axis=1)
-    D_inv = torch.diag(1 / D.sqrt())
+    A     = adj + torch.eye(adj.shape[0], device=adj.device)
+    D_inv = torch.diag(1 / A.sum(axis=1).sqrt())
     return D_inv @ A @ D_inv
 
 def exact_ppr(adj, alpha, mode='sym'):
     ralpha  = 1 - alpha
     A_hat   = calc_A_hat(adj, mode=mode)
-    A_inner = torch.eye(adj.shape[0]) - (1 - ralpha) * A_hat
+    A_inner = torch.eye(adj.shape[0], device=adj.device) - (1 - ralpha) * A_hat
     return ralpha * torch.linalg.inv(A_inner)
 
 
@@ -119,13 +108,14 @@ class PPNP(nn.Module):
         
         self.A       = nn.Parameter(torch.eye(X.shape[1]))
         self.encoder = nn.Sequential()
-        self.output  = nn.Sequential(
-            nn.Linear(X.shape[1], 512),
-            nn.ReLU(),
-            nn.Linear(512, n_class),
-        )
+        self.output  = nn.Linear(X.shape[1], n_class)
+        # self.output  = nn.Sequential(
+        #     nn.Linear(X.shape[1], 512),
+        #     nn.ReLU(),
+        #     nn.Linear(512, n_class),
+        # )
     
-    def forward(self, idx, ppr, diffuse=True):
+    def forward(self, idx, ppr, beta):
         if ppr is None:
             Xp       = X @ self.A
             sim      = Xp @ Xp.T
@@ -137,21 +127,14 @@ class PPNP(nn.Module):
             self.ppr = ppr
         
         out = self.encoder(self.X)
-        
-        if diffuse:
-            out = self.ppr[idx] @ out
-        else:
-            out = out[idx]
-        
+        out = beta * self.ppr[idx] @ out + (1 - beta) * out[idx]
         out = self.output(out)
         return out
 
 
 
-
-
-X = torch.FloatTensor(X)
-y = torch.LongTensor(y)
+X = torch.FloatTensor(X).cuda()
+y = torch.LongTensor(y).cuda()
 
 n_obs    = X.shape[0]
 n_class  = y.max() + 1
@@ -161,11 +144,10 @@ thresh   = torch.topk(sim, 10, axis=-1).values[:,-1]
 adj      = (sim > thresh).float()
 adj      = ((adj + adj.T) > 0).float()
 
-alpha = 0.85
-ppr   = torch.FloatTensor(exact_ppr(adj, alpha=alpha))
-model = PPNP(X=X, n_class=n_class)
+ppr   = exact_ppr(adj, alpha=0.9)
+model = PPNP(X=X, n_class=n_class).cuda()
 
-lr  = 1e-3
+lr  = 1e-2
 opt = torch.optim.Adam(model.parameters(), lr=lr)
 
 epochs     = 10000
@@ -175,19 +157,19 @@ loss_hist = []
 gen = trange(epochs)
 for epoch in gen:
     
-    _ppr = ppr if epoch < 2500 else None
+    _ppr = ppr # if epoch < 2500 else None  
+    beta = epoch / 2500 if epoch < 2500 else 1
     
-    out  = model(idx=idx_train, ppr=_ppr, diffuse=epoch > 1000)
+    if epoch == 2500: print(f'2500 = {acc:0.5f}')
+    # if epoch == 2500: print(f'2500 = {acc:0.5f}')
+    
+    out  = model(idx=idx_train, ppr=_ppr, beta=beta)
     loss = F.cross_entropy(out, y[idx_train])
     
     opt.zero_grad()
     loss.backward()
     opt.step()
     
-    acc = (y[idx_test] == model(idx=idx_test, ppr=model.ppr, diffuse=epoch > 1000).argmax(axis=-1)).float().mean()
+    acc = (y[idx_test] == model(idx=idx_test, ppr=model.ppr, beta=beta).argmax(axis=-1)).float().mean()
     loss_hist.append(float(loss))
-    gen.set_postfix(loss=f'{float(loss):0.5f}', acc=f'{float(acc):0.5f}')
-    
-    
-
-breakpoint()
+    gen.set_postfix(loss=f'{float(loss):0.5f}', acc=f'{float(acc):0.5f}', beta=f'{float(beta):0.5f}')
