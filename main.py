@@ -11,7 +11,7 @@ import os
 import argparse
 import numpy as np
 import pandas as pd
-from tqdm import trange, tqdm 
+from tqdm import trange
 from sklearn.preprocessing import normalize
 
 from sklearn.svm import LinearSVC
@@ -69,7 +69,7 @@ X, y = X[idx_keep], y[idx_keep]
 X = np.ascontiguousarray(X)
 y = np.ascontiguousarray(y)
 
-n_samples_per_class = 2
+n_samples_per_class = 10
 
 # --
 # Run
@@ -133,13 +133,13 @@ def partial_ppr(adj, alpha, idx):
     return ralpha * torch.linalg.solve(A_inner, signals).T
 
 class PPNP(nn.Module):
-    def __init__(self, X, ppr0s, n_class):
+    def __init__(self, X, ppr0, n_class):
         super().__init__()
         self.X       = X
-        self.ppr0s   = ppr0s
+        self.ppr0    = ppr0
         self.A       = nn.Parameter(torch.eye(X.shape[1]))
         self.encoder = nn.Sequential()
-        self.output  = nn.Linear(X.shape[1] * (len(self.ppr0s) + 1), n_class)
+        self.output  = nn.Linear(X.shape[1], n_class)
         # self.output  = nn.Sequential(
         #     nn.Linear(X.shape[1], 512),
         #     nn.ReLU(),
@@ -157,11 +157,11 @@ class PPNP(nn.Module):
         #     # ppr    = exact_ppr(adj, alpha=0.85)[idx]
         #     ppr    = partial_ppr(adj, alpha=0.85, idx=idx)
         # else:
-        out = self.encoder(self.X)
+        ppr = self.ppr0[idx]
         
-        pprs = [ppr0[idx] for ppr0 in self.ppr0s]
-        out  = torch.column_stack([ppr @ out for ppr in pprs] + [out[idx]])
-        out  = self.output(out)
+        out = self.encoder(self.X)
+        out = beta * ppr @ out + ((1 - beta) * out[idx])
+        out = self.output(out)
         return out
 
 
@@ -177,10 +177,10 @@ thresh   = torch.topk(sim, 10, axis=-1).values[:,-1]
 adj      = sim > thresh
 adj      = (adj | adj.T).float()
 
-ppr0s = [exact_ppr(adj, alpha=alpha) for alpha in tqdm([0.1, 0.2, 0.8, 0.85, 0.9, 0.99])]
-model = PPNP(X=X, ppr0s=ppr0s, n_class=n_class).cuda()
+ppr0  = exact_ppr(adj, alpha=0.85)
+model = PPNP(X=X, ppr0=ppr0, n_class=n_class).cuda()
 
-lr  = 1e-3
+lr  = 1e-2
 opt = torch.optim.Adam(model.parameters(), lr=lr)
 
 epochs     = 10000
