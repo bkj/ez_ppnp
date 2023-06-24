@@ -2,6 +2,9 @@
 
 """
   main.py
+  
+  !! Need to test sklearn methods ... last I checked they don't really work, but who knows?
+  
 """
 
 import os
@@ -36,7 +39,7 @@ def parse_args():
   parser = argparse.ArgumentParser()
   parser.add_argument('--dataset', type=str, default='food101')
   parser.add_argument('--model',   type=str, default='openai/clip-vit-large-patch14')
-  parser.add_argument('--sample',  type=int, default=20_000)
+  parser.add_argument('--sample',  type=int, default=5_000)
   parser.add_argument('--seed',    type=int, default=234)
   args = parser.parse_args()
   
@@ -53,18 +56,20 @@ X = normalize(X)
 
 y = np.load(os.path.join('/home/ubuntu/data/img_feats', args.dataset, 'train', args.model, 'y.npy'))
 
-# shuffle
-p    = np.random.permutation(X.shape[0])
-X, y = X[p], y[p]
+# train/test split
+n_class = len(set(y))
 
 # subset
-X, y = X[:args.sample], y[:args.sample]
+#
+# X, y = X[:args.sample], y[:args.sample]
+# --
+idx_keep = pd.Series(np.arange(X.shape[0])).groupby(y).apply(lambda x: x.sample(args.sample // n_class)).values
+X, y = X[idx_keep], y[idx_keep]
 
 X = np.ascontiguousarray(X)
 y = np.ascontiguousarray(y)
 
-# train/test split
-n_class = len(set(y))
+
 
 n_samples_per_class = 2
 
@@ -87,6 +92,23 @@ cas_acc   = (y[idx_test] == cas_preds[idx_test].argmax(axis=-1)).mean() # !! car
 
 print(f'svc_acc={svc_acc} | cas_acc={cas_acc}')
 
+# breakpoint()
+
+# # <<
+# # Why are these so bad?
+
+# from sklearn.semi_supervised import LabelPropagation, LabelSpreading
+
+# lp       = LabelPropagation(kernel='knn', n_neighbors=10).fit(X, y_ss)
+# lp_preds = lp.predict(X)
+# (y[idx_test] == lp_preds[idx_test]).mean()
+
+# ls       = LabelSpreading(kernel='knn', n_neighbors=10).fit(X, y_ss)
+# ls_preds = ls.predict(X)
+# (y[idx_test] == ls_preds[idx_test]).mean()
+
+# # >>
+
 # --
 
 def calc_A_hat(adj, mode):
@@ -99,7 +121,6 @@ def exact_ppr(adj, alpha, mode='sym'):
     A_hat   = calc_A_hat(adj, mode=mode)
     A_inner = torch.eye(adj.shape[0], device=adj.device) - (1 - ralpha) * A_hat
     return ralpha * torch.linalg.inv(A_inner)
-
 
 class PPNP(nn.Module):
     def __init__(self, X, n_class):
@@ -114,6 +135,7 @@ class PPNP(nn.Module):
         #     nn.ReLU(),
         #     nn.Linear(512, n_class),
         # )
+        # self.output = nn.Parameter(torch.randn(X.shape[1], n_class))
     
     def forward(self, idx, ppr, beta):
         if ppr is None:
