@@ -11,7 +11,7 @@ import os
 import argparse
 import numpy as np
 import pandas as pd
-from tqdm import trange
+from tqdm import trange, tqdm 
 from sklearn.preprocessing import normalize
 
 from sklearn.svm import LinearSVC
@@ -69,24 +69,24 @@ X, y = X[idx_keep], y[idx_keep]
 X = np.ascontiguousarray(X)
 y = np.ascontiguousarray(y)
 
-n_samples_per_class = 10
+n_samples_per_class = 2
 
 # --
 # Run
 
 idxs      = np.arange(X.shape[0])
 idx_train = pd.Series(idxs).groupby(y).apply(lambda x: x.sample(n_samples_per_class)).values
-idx_test  = np.setdiff1d(idxs, idx_train)
+idx_valid  = np.setdiff1d(idxs, idx_train)
 
 svc       = LinearSVC().fit(X[idx_train], y[idx_train])
-svc_preds = svc.predict(X[idx_test])
-svc_acc   = (y[idx_test] == svc_preds).mean()
+svc_preds = svc.predict(X[idx_valid])
+svc_acc   = (y[idx_valid] == svc_preds).mean()
 
 y_ss           = y.copy()
-y_ss[idx_test] = -1
+y_ss[idx_valid] = -1
 
 cas_preds = CASClassifier().fit_predict(X, y_ss)
-cas_acc   = (y[idx_test] == cas_preds[idx_test].argmax(axis=-1)).mean() # !! careful about imbalance
+cas_acc   = (y[idx_valid] == cas_preds[idx_valid].argmax(axis=-1)).mean() # !! careful about imbalance
 
 print(f'svc_acc={svc_acc} | cas_acc={cas_acc}')
 
@@ -99,11 +99,11 @@ print(f'svc_acc={svc_acc} | cas_acc={cas_acc}')
 
 # lp       = LabelPropagation(kernel='knn', n_neighbors=10).fit(X, y_ss)
 # lp_preds = lp.predict(X)
-# (y[idx_test] == lp_preds[idx_test]).mean()
+# (y[idx_valid] == lp_preds[idx_valid]).mean()
 
 # ls       = LabelSpreading(kernel='knn', n_neighbors=10).fit(X, y_ss)
 # ls_preds = ls.predict(X)
-# (y[idx_test] == ls_preds[idx_test]).mean()
+# (y[idx_valid] == ls_preds[idx_valid]).mean()
 
 # # >>
 
@@ -133,13 +133,13 @@ def partial_ppr(adj, alpha, idx):
     return ralpha * torch.linalg.solve(A_inner, signals).T
 
 class PPNP(nn.Module):
-    def __init__(self, X, ppr0, n_class):
+    def __init__(self, X, ppr0s, n_class):
         super().__init__()
         self.X       = X
-        self.ppr0    = ppr0
+        self.ppr0s   = ppr0s
         self.A       = nn.Parameter(torch.eye(X.shape[1]))
         self.encoder = nn.Sequential()
-        self.output  = nn.Linear(X.shape[1], n_class)
+        self.output  = nn.Linear(X.shape[1] * (len(self.ppr0s) + 1), n_class)
         # self.output  = nn.Sequential(
         #     nn.Linear(X.shape[1], 512),
         #     nn.ReLU(),
@@ -147,22 +147,21 @@ class PPNP(nn.Module):
         # )
         # self.output = nn.Parameter(torch.randn(X.shape[1], n_class))
     
-    def forward(self, idx, beta):
-        
-        if beta > 0.5:
-            Xp     = self.X @ self.A
-            sim    = Xp @ Xp.T
-            thresh = torch.topk(sim, 10, axis=-1).values[:,-1]
-            adj    = sim > thresh
-            adj    = (adj | adj.T).float()
-            # ppr    = exact_ppr(adj, alpha=0.85)[idx]
-            ppr    = partial_ppr(adj, alpha=0.85, idx=idx)
-        else:
-            ppr = self.ppr0[idx]
-        
+    def forward(self, idx, beta=None):
+        # if beta > 0.5:
+        #     Xp     = self.X @ self.A
+        #     sim    = Xp @ Xp.T
+        #     thresh = torch.topk(sim, 10, axis=-1).values[:,-1]
+        #     adj    = sim > thresh
+        #     adj    = (adj | adj.T).float()
+        #     # ppr    = exact_ppr(adj, alpha=0.85)[idx]
+        #     ppr    = partial_ppr(adj, alpha=0.85, idx=idx)
+        # else:
         out = self.encoder(self.X)
-        out = beta * ppr @ out + ((1 - beta) * out[idx])
-        out = self.output(out)
+        
+        pprs = [ppr0[idx] for ppr0 in self.ppr0s]
+        out  = torch.column_stack([ppr @ out for ppr in pprs] + [out[idx]])
+        out  = self.output(out)
         return out
 
 
@@ -178,24 +177,20 @@ thresh   = torch.topk(sim, 10, axis=-1).values[:,-1]
 adj      = sim > thresh
 adj      = (adj | adj.T).float()
 
-ppr0  = exact_ppr(adj, alpha=0.9)
-model = PPNP(X=X, ppr0=ppr0, n_class=n_class).cuda()
+ppr0s = [exact_ppr(adj, alpha=alpha) for alpha in tqdm([0.1, 0.2, 0.8, 0.85, 0.9, 0.99])]
+model = PPNP(X=X, ppr0s=ppr0s, n_class=n_class).cuda()
 
-lr  = 1e-2
+lr  = 1e-3
 opt = torch.optim.Adam(model.parameters(), lr=lr)
 
 epochs     = 10000
 batch_size = 32
-acc        = 0
 
 loss_hist = []
 gen = trange(epochs)
 for epoch in gen:
-    
-    # _ppr = ppr # if epoch < 2500 else None  
-    beta = epoch / 10_000 if epoch < 10_000 else 1
-    
-    if epoch == 10_000: print(f'10_000 = {acc:0.5f}')
+    beta = epoch / 2500 if epoch < 2500 else 1
+    if epoch == 2500: print(f'2500 = {train_acc:0.5f} | {valid_acc:0.5f}')
     
     out  = model(idx=idx_train, beta=beta)
     loss = F.cross_entropy(out, y[idx_train])
@@ -204,8 +199,14 @@ for epoch in gen:
     loss.backward()
     opt.step()
     
-    if epoch % 100 == 0:
-        acc = (y[idx_test] == model(idx=idx_test, beta=beta).argmax(axis=-1)).float().mean()
+    if epoch % 25 == 0:
+        train_acc = (y[idx_train] == model(idx=idx_train, beta=beta).argmax(axis=-1)).float().mean()
+        valid_acc = (y[idx_valid] == model(idx=idx_valid, beta=beta).argmax(axis=-1)).float().mean()
     
     loss_hist.append(float(loss))
-    gen.set_postfix(loss=f'{float(loss):0.5f}', acc=f'{float(acc):0.5f}', beta=f'{float(beta):0.5f}')
+    gen.set_postfix(
+        loss=f'{float(loss):0.5f}', 
+        train_acc=f'{float(valid_acc):0.5f}', 
+        valid_acc=f'{float(valid_acc):0.5f}', 
+        beta=f'{float(beta):0.5f}'
+    )
